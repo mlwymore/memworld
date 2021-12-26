@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
+#include <time.h>
 
 #ifdef DEBUG
     #define DEBUG_PRINTF(...) printf("DEBUG: "__VA_ARGS__)
@@ -10,16 +11,22 @@
     #define DEBUG_PRINTF(...) do {} while (0)
 #endif
 
-#define WORLD_HEIGHT 16
-#define WORLD_WIDTH 25
-#define WORLD_DEPTH 40
+#define VOXEL_DENSITY 1
 
-#define WINDOW_WIDTH 800
-#define WINDOW_HEIGHT 600
+#define WORLD_HEIGHT (16 * VOXEL_DENSITY)
+#define WORLD_WIDTH (25 * VOXEL_DENSITY)
+#define WORLD_DEPTH (40 * VOXEL_DENSITY)
 
-#define FIELD_OF_VIEW (M_PI / 2)
-#define FOCAL_LENGTH (WINDOW_WIDTH / (2 * tan(FIELD_OF_VIEW / 2)))
-#define MAX_ALTITUDE (7 * M_PI / 16)
+uint32_t world[WORLD_WIDTH][WORLD_HEIGHT][WORLD_DEPTH];
+
+#define WINDOW_WIDTH 600
+#define WINDOW_HEIGHT 480
+
+uint32_t pixels[WINDOW_HEIGHT][WINDOW_WIDTH];
+
+const double FIELD_OF_VIEW = (M_PI / 2);
+double FOCAL_LENGTH;
+const double MAX_ALTITUDE = (7 * M_PI / 16);
 
 #define MAX_DRAW_DISTANCE 100
 #define MAX_DRAW_COLOR 0x777777FF
@@ -44,6 +51,7 @@ const char *fragShaderSource = "#version 330 core\n"
                                "FragColor = texture(screenTexture, TexCoords);\n"
                                "}\0";
                             
+
 typedef struct camera_t {
     int x;
     double x_part;
@@ -55,136 +63,93 @@ typedef struct camera_t {
     double altitude;
 } camera;
 
-// void getXYfromZ(double azi_pix, double alt_pix, int z, int * x, int * y) {
+camera cam = {WORLD_WIDTH / 2, 0, WORLD_HEIGHT / 2, 0, WORLD_DEPTH / 2, 0, 0, 0};
 
-// }
 
 void render_world(const uint32_t world[WORLD_WIDTH][WORLD_HEIGHT][WORLD_DEPTH], 
-        uint32_t buffer[WINDOW_HEIGHT][WINDOW_WIDTH], camera cam) {
+        uint32_t buffer[WINDOW_HEIGHT][WINDOW_WIDTH]) {
 
-    DEBUG_PRINTF("Rendering from (%d, %d, %d), azimuth %.2lf, altitude %.2lf\n", cam.x, cam.y, cam.z, cam.azimuth, cam.altitude);
-    DEBUG_PRINTF("-hfov %.2lf, vfov %.2lf\n", horizontal_fov, vertical_fov);
+    //DEBUG_PRINTF("Rendering from (%d, %d, %d), azimuth %.2lf, altitude %.2lf\n", cam.x, cam.y, cam.z, cam.azimuth, cam.altitude);
+    //DEBUG_PRINTF("-hfov %.2lf, vfov %.2lf\n", horizontal_fov, vertical_fov);
 
     #ifndef DEBUG_ONE_PIXEL
-    for(int i_pix = -WINDOW_WIDTH / 2; i_pix < WINDOW_WIDTH / 2; i_pix++) {
-        for(int j_pix = -WINDOW_HEIGHT / 2; j_pix < WINDOW_HEIGHT / 2; j_pix++) {
+    for(int i_pix = -WINDOW_WIDTH / 2 * VOXEL_DENSITY; i_pix < WINDOW_WIDTH / 2 * VOXEL_DENSITY; i_pix += VOXEL_DENSITY) {
+        for(int j_pix = -WINDOW_HEIGHT / 2 * VOXEL_DENSITY; j_pix < WINDOW_HEIGHT / 2 * VOXEL_DENSITY; j_pix += VOXEL_DENSITY) {
     #else
         int i_pix = WINDOW_WIDTH / 2 - 100;
         int j_pix = WINDOW_HEIGHT / 2 - 1;
     #endif
-            DEBUG_PRINTF("-pixel (%d, %d)\n", i_pix, j_pix);
-            double azi_pix = cam.azimuth + atan2(i_pix, FOCAL_LENGTH);
-            double alt_pix = cam.altitude + atan2(j_pix, sqrt(i_pix*i_pix + FOCAL_LENGTH*FOCAL_LENGTH));
- 
-            DEBUG_PRINTF("--alt_pix %.4lf, azi_pix %.4lf\n", alt_pix, azi_pix);
+            //DEBUG_PRINTF("-pixel (%d, %d)\n", i_pix, j_pix);
+            double azi_pix = cam.azimuth + atan(i_pix / FOCAL_LENGTH);
+            double y1 = FOCAL_LENGTH * sin(cam.altitude);
+            double d = sqrt(FOCAL_LENGTH*FOCAL_LENGTH + i_pix*i_pix);
+            double beta = acos(y1 / FOCAL_LENGTH);
+            double y2 = j_pix * sin(beta);
+            double alt_pix = asin((y1 + y2) / sqrt(d*d + j_pix*j_pix));
 
-            double ddz = 1;
-            double ddx = fabs(tan(azi_pix) * ddz);
-            double ddy = fabs(tan(alt_pix) * sqrt(ddx*ddx + ddz*ddz));
+            if(alt_pix > M_PI / 2) {
+                azi_pix += M_PI;
+                alt_pix = M_PI - alt_pix;
+            } else if(alt_pix <= -M_PI / 2) {
+                azi_pix += M_PI;
+                alt_pix = -M_PI - alt_pix;
+            }
+            if(azi_pix > M_PI) {
+                azi_pix -= 2 * M_PI;
+            } else if(azi_pix <= -M_PI) {
+                azi_pix += 2 * M_PI;
+            }
+ 
+            //DEBUG_PRINTF("--alt_pix %.4lf, azi_pix %.4lf\n", alt_pix, azi_pix);
+
+            double uy = sin(alt_pix);
+
+            double theta = azi_pix;
+            if(azi_pix < 0 && azi_pix >= -M_PI / 2) {
+                theta = -azi_pix;
+            } else if(azi_pix < -M_PI / 2) {
+                theta = azi_pix + M_PI;
+            } else if(azi_pix > M_PI / 2) {
+                theta = M_PI - azi_pix;
+            }
+
+            double h = sqrt(1 - uy*uy);
+
+            double ux = h * sin(theta);
+            if(azi_pix < 0) {
+                ux = -ux;
+            }
+
+            double uz = h * cos(theta);
+            if(azi_pix < -M_PI / 2 || azi_pix > M_PI / 2) {
+                uz = -uz;
+            }
 
             int rendered = 0;
 
-            int dz, dx, dy, prev_dz = 0, prev_dx = 0, prev_dy = 0;
-            for(int i = 1; i <= MAX_DRAW_DISTANCE; i++) {
-                // int ddz, ddx, ddy;
-                // //Try z first
-                // ddz = azi_pix > -M_PI / 2 && azi_pix < M_PI / 2 ? dz + 1 : dz - 1;
-                // ddx = roundl(tan(azi_pix) * ddz);
-                // ddy = roundl(tan(alt_pix) * sqrt(ddx*ddx + ddz*ddz));
+            double dz, dx, dy;
+            for(int i = 1; i <= MAX_DRAW_DISTANCE * VOXEL_DENSITY; i++) {
 
-                // if(labs(ddy - dy) > 1) {
-                //     //Try y second
-                //     ddy = alt_pix < 0 ? dy - 1 : dy + 1;
-                //     ddx = roundl(sqrt(pow(tan(alt_pix), 2) * pow(tan(azi_pix), 2) / (ddy*ddy*(pow(tan(azi_pix), 2) + 1))));
-                //     ddz = roundl(sqrt(pow(tan(alt_pix), 2) / (ddy*ddy) - ddx*ddx));
-                // }
+                dx = ux * i;
+                dy = uy * i;
+                dz = uz * i;
 
-                // if(labs(ddx - dx) > 1 || labs(ddz - dz) > 1) {
-                //     //Try x third
-                //     ddx = azi_pix < 0 ? dx - 1 : dx + 1;
-                //     ddz = roundl(ddx / tan(azi_pix));
-                //     ddy = roundl(tan(alt_pix) * sqrt(ddx*ddx + ddz*ddz));
-                // }
+                //DEBUG_PRINTF("---Incrementing y\n");
+                //DEBUG_PRINTF("---(%d, %d, %d)\n", cam.x + dx, cam.y + dy, cam.z + dz);
+                //DEBUG_PRINTF("---value is 0x%08X\n", world[cam.x + dx][cam.y + dy][cam.z + dz]);
 
-                // dz = ddz;
-                // dy = ddy;
-                // dx = ddx;
-
-
-                // } else if(ddy >= ddx) {
-                //     dy = alt_pix < 0 ? -i : i;
-                //     dx = roundl(sqrt(pow(tan(alt_pix), 2) * pow(tan(azi_pix), 2) / (dy*dy*(pow(tan(azi_pix), 2) + 1))));
-                //     dz = roundl(sqrt(pow(tan(alt_pix), 2) / (dy*dy) - dx*dx));
-                // } else {
-                //     dx = azi_pix < 0 ? -i : i;
-                //     dz = roundl(dx / tan(azi_pix));
-                //     dy = roundl(tan(alt_pix) * sqrt(dx*dx + dz*dz));
-                // }
-
-                if(ddz >= ddx && ddz >= ddy) {
-                    dz = azi_pix > -M_PI / 2 && azi_pix < M_PI / 2 ? prev_dz + 1 : prev_dz - 1;
-                    dx = roundl(tan(azi_pix) * dz);
-                    dy = roundl(tan(alt_pix) * sqrt(dx*dx + dz*dz));
-                    if(labs(dx - prev_dx) > 1) {
-                        dx = azi_pix < 0 ? prev_dx - 1 : prev_dx + 1;
-                        dz = roundl(dx / tan(azi_pix));
-                        dy = roundl(tan(alt_pix) * sqrt(dx*dx + dz*dz));
-                    }
-                    if(labs(dy - prev_dy) > 1) {
-                        dy = alt_pix < 0 ? prev_dy - 1 : prev_dy + 1;
-                        dx = roundl(sqrt(pow(tan(alt_pix), 2) * pow(tan(azi_pix), 2) / (dy*dy*(pow(tan(azi_pix), 2) + 1))));
-                        dz = roundl(sqrt(pow(tan(alt_pix), 2) / (dy*dy) - dx*dx));
-                    }
-                } else if(ddy >= ddx) {
-                    dy = alt_pix < 0 ? prev_dy - 1 : prev_dy + 1;
-                    dx = roundl(sqrt(pow(tan(alt_pix), 2) * pow(tan(azi_pix), 2) / (dy*dy*(pow(tan(azi_pix), 2) + 1))));
-                    dz = roundl(sqrt(pow(tan(alt_pix), 2) / (dy*dy) - dx*dx));
-                    if(labs(dz - prev_dz) > 1) {
-                        dz = azi_pix > -M_PI / 2 && azi_pix < M_PI / 2 ? prev_dz + 1 : prev_dz - 1;
-                        dx = roundl(tan(azi_pix) * dz);
-                        dy = roundl(tan(alt_pix) * sqrt(dx*dx + dz*dz));                        
-                    }
-                    if(labs(dx - prev_dx) > 1) {
-                        dx = azi_pix < 0 ? prev_dx - 1 : prev_dx + 1;
-                        dz = roundl(dx / tan(azi_pix));
-                        dy = roundl(tan(alt_pix) * sqrt(dx*dx + dz*dz));
-                    }
-                } else {
-                    dx = azi_pix < 0 ? prev_dx - 1 : prev_dx + 1;
-                    dz = roundl(dx / tan(azi_pix));
-                    dy = roundl(tan(alt_pix) * sqrt(dx*dx + dz*dz));
-                    if(labs(dz - prev_dz) > 1) {
-                        dz = azi_pix > -M_PI / 2 && azi_pix < M_PI / 2 ? prev_dz + 1 : prev_dz - 1;
-                        dx = roundl(tan(azi_pix) * dz);
-                        dy = roundl(tan(alt_pix) * sqrt(dx*dx + dz*dz));                        
-                    }
-                    if(labs(dy - prev_dy) > 1) {
-                        dy = alt_pix < 0 ? prev_dy - 1 : prev_dy + 1;
-                        dx = roundl(sqrt(pow(tan(alt_pix), 2) * pow(tan(azi_pix), 2) / (dy*dy*(pow(tan(azi_pix), 2) + 1))));
-                        dz = roundl(sqrt(pow(tan(alt_pix), 2) / (dy*dy) - dx*dx));
-                    }
-                }
-
-
-                prev_dx = dx;
-                prev_dy = dy;
-                prev_dz = dz;
-
-                DEBUG_PRINTF("---Incrementing y\n");
-                DEBUG_PRINTF("---(%d, %d, %d)\n", cam.x + dx, cam.y + dy, cam.z + dz);
-                DEBUG_PRINTF("---value is 0x%08X\n", world[cam.x + dx][cam.y + dy][cam.z + dz]);
-
-                if(world[cam.x + dx][cam.y + dy][cam.z + dz] != 0) {
-                    DEBUG_PRINTF("---pixel assigned\n");
-                    buffer[j_pix + WINDOW_HEIGHT / 2][i_pix + WINDOW_WIDTH / 2] = world[cam.x + dx][cam.y + dy][cam.z + dz];
+                uint32_t color = world[lround(cam.x + cam.x_part + dx)][lround(cam.y + cam.y_part + dy)][lround(cam.z + cam.z_part + dz)];
+                if(color != 0) {
+                    //DEBUG_PRINTF("---pixel assigned\n");
+                    buffer[j_pix / VOXEL_DENSITY + WINDOW_HEIGHT / 2][i_pix / VOXEL_DENSITY + WINDOW_WIDTH / 2] = color;
                     rendered = 1;
                     break;
                 }
             }
 
             if(!rendered) {
-                buffer[j_pix + WINDOW_HEIGHT / 2][i_pix + WINDOW_WIDTH / 2] = MAX_DRAW_COLOR;
-                DEBUG_PRINTF("---default color\n");
+                buffer[j_pix / VOXEL_DENSITY + WINDOW_HEIGHT / 2][i_pix / VOXEL_DENSITY + WINDOW_WIDTH / 2] = MAX_DRAW_COLOR;
+                //DEBUG_PRINTF("---default color\n");
             }
             #ifdef DEBUG
                 uint32_t target_color = 0x000000FF;
@@ -203,40 +168,77 @@ void framebuffer_size_callback(GLFWwindow *window, int width, int height)
     glViewport(0, 0, width, height);
 }
 
-void process_input(GLFWwindow *window, camera * cam)
+void process_input(GLFWwindow *window, const uint32_t world[WORLD_WIDTH][WORLD_HEIGHT][WORLD_DEPTH])
 {
-    const double camera_speed = 0.1; // adjust accordingly
-    const double rotate_speed = 0.1;
+    const double camera_speed = 1 * VOXEL_DENSITY; // adjust accordingly
+    double dx, dz;
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-        if(cam->altitude < MAX_ALTITUDE) {
-            cam->altitude += rotate_speed;
-        }
+        dx = sin(cam.azimuth);
+        dz = cos(cam.azimuth);
     }
 
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-        if(cam->altitude > -MAX_ALTITUDE) {
-            cam->altitude -= rotate_speed;
-        }
+        
     }
 
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-        cam->azimuth -= rotate_speed;
-        if(cam->azimuth <= -M_PI) {
-            cam->azimuth += 2*M_PI;
-        }
+        
     }
 
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-        cam->azimuth += rotate_speed;
-        if(cam->azimuth > M_PI) {
-            cam->azimuth -= 2*M_PI;
+        
+    }
+
+    double newX = cam.x + cam.x_part + dx * camera_speed;
+    double newZ = cam.z + cam.z_part + dz * camera_speed;
+    if(world[(int)newX][cam.y][(int)newZ] == 0) {
+        cam.x = newX;
+        cam.z = newZ;
+        cam.x_part = newX - cam.x;
+        if(cam.x_part < 0) {
+            cam.x_part += 1;
         }
+        cam.z_part = newZ - cam.z;
+        if(cam.z_part < 0) {
+            cam.z_part += 1;
+        }
+    }
+}
+
+void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
+    static float lastX = WINDOW_WIDTH / 2;
+    static float lastY = WINDOW_HEIGHT / 2;
+
+    float xoffset = xpos - lastX;
+    float yoffset = lastY - ypos;
+
+    lastX = xpos;
+    lastY = ypos;
+
+    const float sensitivity = 0.005f;
+    xoffset *= sensitivity;
+    yoffset *= sensitivity;
+
+    cam.altitude += yoffset;
+    cam.azimuth += xoffset;
+
+    if(cam.altitude > MAX_ALTITUDE) {
+        cam.altitude = MAX_ALTITUDE;
+    } else if (cam.altitude < -MAX_ALTITUDE) {
+        cam.altitude = -MAX_ALTITUDE;
+    }
+
+    if(cam.azimuth <= -M_PI) {
+        cam.azimuth += 2*M_PI;
+    } else if(cam.azimuth > M_PI) {
+        cam.azimuth -= 2*M_PI;
     }
 }
 
 int main()
 {
-    uint32_t world[WORLD_WIDTH][WORLD_HEIGHT][WORLD_DEPTH];
+    FOCAL_LENGTH = (WINDOW_WIDTH * VOXEL_DENSITY / (2 * tan(FIELD_OF_VIEW / 2)));
+
     for (int x = 0; x < WORLD_WIDTH; x++) {
         for (int y = 0; y < WORLD_HEIGHT; y++) {
             for (int z = 0; z < WORLD_DEPTH; z++) {
@@ -259,7 +261,6 @@ int main()
         }
     }
 
-    uint32_t pixels[WINDOW_HEIGHT][WINDOW_WIDTH];
     for (int j = 0; j < WINDOW_HEIGHT; j++)
     {
         for (int i = 0; i < WINDOW_WIDTH; i++)
@@ -292,6 +293,9 @@ int main()
     }
 
     glfwMakeContextCurrent(window);
+
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetCursorPosCallback(window, mouse_callback); 
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
     {
@@ -372,14 +376,13 @@ int main()
         DEBUG_PRINTF("b %x\n", err);
     }
 
-    int i = 0;
-
-    camera cam = {WORLD_WIDTH / 2, 0, WORLD_HEIGHT / 2, 0, WORLD_DEPTH / 2, 0, 0, 0};
+    clock_t t = clock();
+    clock_t prev_t = t;
 
     while (!glfwWindowShouldClose(window))
     {
-        glClearColor(1.0f, 0.5f, 1.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
+        //glClearColor(1.0f, 0.5f, 1.0f, 1.0f);
+        //glClear(GL_COLOR_BUFFER_BIT);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture);
         glBindVertexArray(quadVAO);
@@ -397,9 +400,9 @@ int main()
         // {
         //     break;
         // }
-        process_input(window, &cam);
+        process_input(window, world);
 
-        render_world(world, pixels, cam);
+        render_world(world, pixels);
 
         glTexSubImage2D(GL_TEXTURE_2D,
                         0,
@@ -410,7 +413,10 @@ int main()
                         GL_RGBA,
                         GL_UNSIGNED_INT_8_8_8_8,
                         (void *)pixels);
-        //glGenerateMipmap(GL_TEXTURE_2D);
+        
+        t = clock();
+        printf("%lf\n", CLOCKS_PER_SEC / (double)(t - prev_t));
+        prev_t = t;
     }
 
     glfwTerminate();

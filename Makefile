@@ -1,10 +1,10 @@
 .PHONY: memworld
 
-memworld:
+memworld: memworld.c glad.c
 	gcc -o memworld memworld.c glad.c -lglfw3 -lpthread -framework Cocoa -framework OpenGL -framework IOKit
 
-debug:
+debug: memworld.c glad.c
 	gcc -o memworld memworld.c glad.c -lglfw3 -lpthread -framework Cocoa -framework OpenGL -framework IOKit -DDEBUG
 
-debug-one:
+debug-one: memworld.c glad.c
 	gcc -o memworld memworld.c glad.c -lglfw3 -lpthread -framework Cocoa -framework OpenGL -framework IOKit -DDEBUG -DDEBUG_ONE_PIXEL
